@@ -51,6 +51,11 @@ func (c *Channel) sendOAuthInvite(ctx context.Context, userID, chatID string, is
 		if fbErr := sendTo(chatID); fbErr != nil {
 			slog.Warn("bitrix24 mcp: oauth invite fallback also failed",
 				"channel", c.Name(), "user", userID, "chat_id", chatID, "err", fbErr)
+			// Total delivery failure — the user got NOTHING (not the DM, not the
+			// fallback). Release the debounce slot we just took so the user's
+			// next message retries immediately instead of silently waiting out
+			// the full 5-minute TTL for an invite that never arrived.
+			c.releaseOAuthInviteNotify(userID)
 		}
 		return
 	}
@@ -66,17 +71,45 @@ func (c *Channel) sendOAuthInvite(ctx context.Context, userID, chatID string, is
 // check-and-set shape (provisioner.go) but guards a DIFFERENT debounce map —
 // this one gates the "please re-authorize" DM, not the underlying auto-onboard
 // attempt. Returns true when the caller acquired the slot (not debounced).
+//
+// Keyed by userID alone (no serverID, unlike mcpDebounceKey elsewhere in this
+// package) — safe today because one Channel is exactly one bot on one portal
+// wired to one mcp_servers row (c.mcpServerID is a single field, not a set).
+// If a future refactor lets one Channel serve multiple MCP servers, this key
+// would need serverID added too, the same way mcpDebounceKey already has it.
+//
+// Opportunistically sweeps expired entries on every call (cheap: bounded by
+// the number of unique Bitrix user IDs that have ever triggered this flow,
+// and only walks the map this function itself owns) so the map doesn't grow
+// for the lifetime of the process — same unbounded-growth pattern flagged in
+// mcpDebounce/notifyDebounce is deliberately not repeated here.
 func (c *Channel) tryAcquireOAuthInviteNotify(userID string) bool {
 	c.oauthInviteMu.Lock()
 	defer c.oauthInviteMu.Unlock()
 	if c.oauthInviteDebounce == nil {
 		c.oauthInviteDebounce = make(map[string]time.Time)
 	}
-	if ts, ok := c.oauthInviteDebounce[userID]; ok && time.Since(ts) < mcpUserNotifyDebounceTTL {
+	now := time.Now()
+	for id, ts := range c.oauthInviteDebounce {
+		if now.Sub(ts) >= mcpUserNotifyDebounceTTL {
+			delete(c.oauthInviteDebounce, id)
+		}
+	}
+	if ts, ok := c.oauthInviteDebounce[userID]; ok && now.Sub(ts) < mcpUserNotifyDebounceTTL {
 		return false
 	}
-	c.oauthInviteDebounce[userID] = time.Now()
+	c.oauthInviteDebounce[userID] = now
 	return true
+}
+
+// releaseOAuthInviteNotify clears a user's debounce entry early. Only called
+// when delivery totally failed (DM AND the chatID fallback both errored) —
+// see sendOAuthInvite — so the debounce doesn't block a retry for the full
+// TTL when the user never actually received anything.
+func (c *Channel) releaseOAuthInviteNotify(userID string) {
+	c.oauthInviteMu.Lock()
+	delete(c.oauthInviteDebounce, userID)
+	c.oauthInviteMu.Unlock()
 }
 
 // UserOnboardResult is what HandleUserOAuthCallback returns so the HTTP
@@ -113,6 +146,12 @@ func (c *Channel) HandleUserOAuthCallback(ctx context.Context, code string, payl
 	// one the DM invite was built for. Without this, user X's invite link
 	// could be completed by user Y (e.g. forwarded, or X asks a colleague to
 	// click it), silently attaching Y's Bitrix identity to X's MCP row.
+	//
+	// This is a DIFFERENT check from the portal/domain/member_id identity
+	// validation ExchangeUserAuthCode already ran (portal.go,
+	// validateTokenResponseIdentity) — that one confirms "same portal we
+	// think it is," this one confirms "same PERSON we sent the link to."
+	// Both are required; neither substitutes for the other.
 	gotUserID := strconv.FormatInt(tr.UserID, 10)
 	if gotUserID != payload.UserID {
 		slog.Warn("bitrix24 oauth callback: identity mismatch — authorized as a different Bitrix user",

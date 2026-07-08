@@ -451,6 +451,11 @@ func (p *Portal) RefreshUserToken(ctx context.Context, refreshToken string) (*To
 // checks), but the caller decides what to do with the resulting user tokens
 // (mint MCP credentials) instead of persisting them as portal state. Used by
 // the per-user OAuth re-auth flow (oauth_user_flow.go).
+//
+// validateTokenResponseIdentity below only confirms the response belongs to
+// THIS portal (domain/member_id/app_token) — it says nothing about WHICH
+// Bitrix user authorized. The caller (HandleUserOAuthCallback,
+// oauth_user_flow.go) runs a separate check against tr.UserID for that.
 func (p *Portal) ExchangeUserAuthCode(ctx context.Context, code string) (*TokenResponse, error) {
 	if code == "" {
 		return nil, errors.New("bitrix24 user exchange: code required")
