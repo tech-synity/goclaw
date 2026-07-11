@@ -147,11 +147,13 @@ func (c *Channel) HandleUserOAuthCallback(ctx context.Context, code string, payl
 	// could be completed by user Y (e.g. forwarded, or X asks a colleague to
 	// click it), silently attaching Y's Bitrix identity to X's MCP row.
 	//
-	// This is a DIFFERENT check from the portal/domain/member_id identity
-	// validation ExchangeUserAuthCode already ran (portal.go,
-	// validateTokenResponseIdentity) — that one confirms "same portal we
-	// think it is," this one confirms "same PERSON we sent the link to."
-	// Both are required; neither substitutes for the other.
+	// Portal/domain identity was already checked one layer up, in
+	// handleUserOAuthCallback (webhook.go), against the redirect's own
+	// `domain` query param — NOT against tr.Domain here, which is the OAuth
+	// server's own domain for this kind of exchange, not the portal's (see
+	// ExchangeUserAuthCode doc comment). This check confirms "same PERSON we
+	// sent the link to"; that one confirmed "same portal." Both matter;
+	// neither substitutes for the other.
 	gotUserID := strconv.FormatInt(tr.UserID, 10)
 	if gotUserID != payload.UserID {
 		slog.Warn("bitrix24 oauth callback: identity mismatch — authorized as a different Bitrix user",
@@ -163,8 +165,14 @@ func (c *Channel) HandleUserOAuthCallback(ctx context.Context, code string, payl
 		return nil, errors.New("bitrix24 oauth callback: mcp provisioning not configured for this channel")
 	}
 
+	// NOTE: tr.Domain is deliberately NOT used here — it's the OAuth server's
+	// own domain for this kind of exchange, not the portal's (see
+	// ExchangeUserAuthCode). payload.Domain (signed into the state at
+	// BuildUserAuthorizeURL time, sourced from the real webhook event that
+	// triggered the invite, and re-validated against the redirect's own
+	// `domain` param in handleUserOAuthCallback) is the correct value.
 	resp, err := c.mcpClient.autoOnboard(ctx, autoOnboardRequest{
-		Domain:       tr.Domain,
+		Domain:       payload.Domain,
 		BitrixUserID: payload.UserID,
 		AccessToken:  tr.AccessToken,
 		RefreshToken: tr.RefreshToken,
@@ -178,7 +186,7 @@ func (c *Channel) HandleUserOAuthCallback(ctx context.Context, code string, payl
 	creds := store.MCPUserCredentials{
 		APIKey: resp.APIKey,
 		Env: map[string]string{
-			"BITRIX_DOMAIN":        tr.Domain,
+			"BITRIX_DOMAIN":        payload.Domain,
 			"BITRIX_ACCESS_TOKEN":  tr.AccessToken,
 			"BITRIX_REFRESH_TOKEN": tr.RefreshToken,
 			"BITRIX_EXPIRES_AT":    expiresAt,

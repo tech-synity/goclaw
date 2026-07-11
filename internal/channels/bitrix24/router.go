@@ -27,16 +27,12 @@ const (
 	eventsPath        = "/bitrix24/events"
 	// handlerPath is the "Application URL" / "Application settings handler"
 	// registered with partners.bitrix24.com. Bitrix24 GET-pings it during
-	// app registration to verify reachability (must return 2xx) and later
-	// iframe-loads it (with POST tokens) when a user opens the app inside
-	// their portal. See handleAppPage for behavior.
+	// app registration to verify reachability (must return 2xx), iframe-loads
+	// it when a user opens the app inside their portal, AND — for Local Apps —
+	// is where Bitrix unconditionally redirects after a user approves/declines
+	// an OAuth authorize request, ignoring any `redirect_uri` we pass
+	// (confirmed against live behavior). See handleAppPage for all three cases.
 	handlerPath = "/bitrix24/handler"
-	// userOAuthCallbackPath is where Bitrix redirects a user's browser after
-	// they approve (or decline) the per-user re-authorization link sent via
-	// DM (see oauth_state_codec.go BuildUserAuthorizeURL, oauth_user_flow.go).
-	// Public — no gateway auth — same as installPath; safety comes from the
-	// HMAC-signed state, not route-level auth (design.md §9, §5).
-	userOAuthCallbackPath = "/bitrix24/oauth/user/callback"
 )
 
 const ambiguousDomainKey = "\x00ambiguous-domain"
@@ -329,8 +325,6 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		r.handleEvent(w, req)
 	case handlerPath:
 		r.handleAppPage(w, req)
-	case userOAuthCallbackPath:
-		r.handleUserOAuthCallback(w, req)
 	default:
 		http.NotFound(w, req)
 	}

@@ -613,7 +613,7 @@ func TestProvisionIfMissing_NewUser_ReturnsAuthRequired(t *testing.T) {
 func TestProvisionIfMissing_DeadRefreshToken_ReturnsAuthRequired_RowUntouched(t *testing.T) {
 	mcpSrv := httptest.NewServer(mcpAutoOnboardHandler())
 	defer mcpSrv.Close()
-	oauthSrv := httptest.NewServer(oauthTokenHandler(0, "", true)) // invalid_grant
+	oauthSrv := httptest.NewServer(oauthTokenHandler(0, true)) // invalid_grant
 	defer oauthSrv.Close()
 
 	mcpStore := newFakeMCPStore()
