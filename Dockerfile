@@ -2,7 +2,7 @@
 
 # ENABLE_EMBEDUI controls whether the web UI is built and embedded.
 # Must be declared before first FROM to use in stage selector.
-ARG ENABLE_EMBEDUI=false
+ARG ENABLE_EMBEDUI=true
 
 # ── Stage 0: Build Web UI ──
 # BuildKit skips this stage entirely when ENABLE_EMBEDUI=false
@@ -39,7 +39,7 @@ COPY . .
 ARG ENABLE_OTEL=false
 ARG ENABLE_TSNET=false
 ARG ENABLE_REDIS=false
-ARG ENABLE_EMBEDUI=false
+ARG ENABLE_EMBEDUI=true
 ARG VERSION=
 
 # Copy web UI dist — from web-builder when ENABLE_EMBEDUI=true, empty dir otherwise.
