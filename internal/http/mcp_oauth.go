@@ -92,8 +92,9 @@ func (h *MCPOAuthHandler) RegisterRoutes(mux *http.ServeMux) {
 // Priority:
 //  1. Config public_url  — explicit admin override (wins when set)
 //  2. X-Forwarded-Proto + X-Forwarded-Host  — nginx / reverse proxy
-//  3. r.Host  — the backend's actual host:port (correct for local dev even when
-//     the frontend runs on a different port than the backend)
+//  3. r.Host + X-Forwarded-Proto  — the backend's actual host, with the scheme
+//     the client used (correct for local dev, and for proxies like Cloudflare
+//     that keep the original Host header instead of sending X-Forwarded-Host)
 //  4. localhost:port  — final fallback
 //
 // Using r.Host instead of the Origin header is intentional: Origin carries the
@@ -109,7 +110,7 @@ func (h *MCPOAuthHandler) callbackURL(r *http.Request) string {
 
 	// 2. Nginx / reverse-proxy forwarded headers.
 	if fwdHost := r.Header.Get("X-Forwarded-Host"); fwdHost != "" {
-		proto := r.Header.Get("X-Forwarded-Proto")
+		proto := forwardedProto(r)
 		if proto == "" {
 			proto = "https"
 		}
@@ -118,9 +119,19 @@ func (h *MCPOAuthHandler) callbackURL(r *http.Request) string {
 
 	// 3. Backend's own host:port from the request (works for localhost:18790 and
 	//    any custom host — correct even in split-port dev setups).
+	//
+	//    X-Forwarded-Proto is read here as well: TLS-terminating proxies such as
+	//    Cloudflare preserve the original Host header and never send
+	//    X-Forwarded-Host, so case 2 does not fire for them. Without the scheme
+	//    check the callback would be built as http:// while the browser reached
+	//    the gateway over https, and providers reject that as a redirect_uri
+	//    mismatch.
 	if host := r.Host; host != "" {
 		scheme := "http"
-		if r.TLS != nil {
+		switch {
+		case forwardedProto(r) != "":
+			scheme = forwardedProto(r)
+		case r.TLS != nil:
 			scheme = "https"
 		}
 		return scheme + "://" + host + path
@@ -132,6 +143,19 @@ func (h *MCPOAuthHandler) callbackURL(r *http.Request) string {
 		port = 8080
 	}
 	return fmt.Sprintf("http://localhost:%d%s", port, path)
+}
+
+// forwardedProto returns the scheme the client used to reach the gateway, as
+// reported by the X-Forwarded-Proto header, or "" when the header is absent.
+//
+// Chained proxies append rather than replace, so the header can carry a list
+// ("https, http"); the left-most entry is the original client scheme.
+func forwardedProto(r *http.Request) string {
+	proto := r.Header.Get("X-Forwarded-Proto")
+	if idx := strings.Index(proto, ","); idx >= 0 {
+		proto = proto[:idx]
+	}
+	return strings.ToLower(strings.TrimSpace(proto))
 }
 
 // --- POST /v1/mcp/oauth/start ---
