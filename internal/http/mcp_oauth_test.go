@@ -285,6 +285,48 @@ func TestCallbackURLForwardedHost(t *testing.T) {
 	}
 }
 
+// Cloudflare and similar TLS-terminating proxies forward X-Forwarded-Proto but
+// keep the original Host header, so no X-Forwarded-Host arrives. The callback
+// must still be https — an http:// redirect_uri is rejected by providers.
+func TestCallbackURLForwardedProtoWithoutForwardedHost(t *testing.T) {
+	h := &MCPOAuthHandler{}
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r.Host = "goclaw.example.com"
+	r.Header.Set("X-Forwarded-Proto", "https")
+	got := h.callbackURL(r)
+	want := "https://goclaw.example.com/v1/mcp/oauth/callback"
+	if got != want {
+		t.Errorf("callbackURL = %q, want %q", got, want)
+	}
+}
+
+// Chained proxies append to X-Forwarded-Proto instead of replacing it; the
+// left-most entry is the scheme the client actually used.
+func TestCallbackURLForwardedProtoList(t *testing.T) {
+	h := &MCPOAuthHandler{}
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r.Host = "goclaw.example.com"
+	r.Header.Set("X-Forwarded-Proto", "https, http")
+	got := h.callbackURL(r)
+	want := "https://goclaw.example.com/v1/mcp/oauth/callback"
+	if got != want {
+		t.Errorf("callbackURL = %q, want %q", got, want)
+	}
+}
+
+// Plain local dev: no proxy headers, no TLS — the callback stays http so the
+// loopback flow keeps working.
+func TestCallbackURLPlainHostStaysHTTP(t *testing.T) {
+	h := &MCPOAuthHandler{}
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r.Host = "localhost:18790"
+	got := h.callbackURL(r)
+	want := "http://localhost:18790/v1/mcp/oauth/callback"
+	if got != want {
+		t.Errorf("callbackURL = %q, want %q", got, want)
+	}
+}
+
 func TestCallbackURLFallback(t *testing.T) {
 	h := &MCPOAuthHandler{port: 18790}
 	// httptest request has no Host header by default.
