@@ -19,6 +19,8 @@ func init() {
 		MsgFailedToDelete:   "failed to delete %s: %s",
 		MsgFailedToSave:     "failed to save %s: %s",
 		MsgInvalidUpdates:   "invalid updates",
+		// Vault orphan collision on agent delete (#1550)
+		MsgAgentDeleteVaultConflict: "failed to delete agent: a vault document of this agent is at a path another deleted owner already orphaned; delete or re-path this agent's vault documents first, or upgrade to schema version 99 or later",
 
 		// Agent
 		MsgAgentNotFound:                       "agent not found: %s",
@@ -230,9 +232,11 @@ func init() {
 		MsgToolAnnouncementSingle: "I'll use %s to handle the next step.",
 		MsgToolAnnouncementMulti:  "I'll use %s to handle the next step.",
 
-		MsgSkillNudgePostscript: "This task involved several steps. Want me to save the process as a reusable skill? Reply **\"save as skill\"** or **\"skip\"**.",
-		MsgSkillNudge70Pct:      "[System] You are at 70% of your iteration budget. Consider whether any patterns from this session would make a good skill.",
-		MsgSkillNudge90Pct:      "[System] You are at 90% of your iteration budget. If this session involved reusable patterns, consider saving them as a skill before completing.",
+		MsgSkillNudgePostscript:  "This task involved several steps. Want me to save the process as a reusable skill? Reply **\"save as skill\"** or **\"skip\"**.",
+		MsgSkillNudge70Pct:       "[System] You are at 70% of your iteration budget. Consider whether any patterns from this session would make a good skill.",
+		MsgSkillNudge90Pct:       "[System] You are at 90% of your iteration budget. If this session involved reusable patterns, consider saving them as a skill before completing.",
+		MsgEmptyReplyFallback:    "⚠️ Agent couldn't generate a response. Note: some tool actions may have already been executed — please verify before retrying",
+		MsgContextBudgetExceeded: "⚠️ This conversation has grown too long for the model's context window, so I stopped before answering. Some tool actions from this turn may already have run. Please start a new session to continue.",
 
 		MsgInvalidRole: "invalid role: allowed values are owner, admin, operator, member, viewer",
 

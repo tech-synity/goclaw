@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/dop251/goja"
+	"github.com/google/uuid"
 
 	"github.com/nextlevelbuilder/goclaw/internal/hooks"
 )
@@ -15,15 +16,20 @@ import (
 // version change. strict=true gives stronger semantics (assigning to an
 // undeclared variable throws instead of silently creating a global).
 func (h *ScriptHandler) compile(cfg hooks.HookConfig, source string) (*goja.Program, error) {
-	key := progCacheKey{ID: cfg.ID, Version: cfg.Version}
-	if prog, ok := h.progCache.Get(key); ok {
-		return prog, nil
+	if cfg.ID != uuid.Nil {
+		key := progCacheKey{ID: cfg.ID, Version: cfg.Version}
+		if prog, ok := h.progCache.Get(key); ok {
+			return prog, nil
+		}
 	}
 	prog, err := goja.Compile(cfg.ID.String(), source, true)
 	if err != nil {
 		return nil, fmt.Errorf("compile: %w", err)
 	}
-	h.progCache.Add(key, prog)
+	if cfg.ID != uuid.Nil {
+		key := progCacheKey{ID: cfg.ID, Version: cfg.Version}
+		h.progCache.Add(key, prog)
+	}
 	return prog, nil
 }
 
@@ -42,6 +48,10 @@ func bindEvent(rt *goja.Runtime, ev hooks.Event) error {
 		"sessionId": ev.SessionID,
 		"tenantId":  ev.TenantID.String(),
 		"agentId":   ev.AgentID.String(),
+		"senderId":  ev.SenderID,
+		"sender_id": ev.SenderID,
+		"userId":    ev.UserID,
+		"user_id":   ev.UserID,
 		"toolName":  ev.ToolName,
 		"toolInput": ev.ToolInput,
 		"rawInput":  ev.RawInput,
@@ -134,36 +144,43 @@ func captureStdout(rt *goja.Runtime, buf *strings.Builder) {
 	_ = rt.Set("console", console)
 }
 
-// parseReturn enforces the `{decision, reason?, updatedInput?}` contract.
+// parseReturn enforces the
+// `{decision, reason?, additionalContext?, updatedInput?}` contract.
 // Any deviation (non-object, missing field, unknown decision string) maps to
 // DecisionError with a descriptive error.
-func parseReturn(rt *goja.Runtime, v goja.Value) (hooks.Decision, string, map[string]any, error) {
+func parseReturn(rt *goja.Runtime, v goja.Value) (hooks.Decision, string, string, map[string]any, error) {
 	if v == nil || goja.IsUndefined(v) || goja.IsNull(v) {
-		return hooks.DecisionError, "", nil, errors.New("script return: must be object with decision")
+		return hooks.DecisionError, "", "", nil, errors.New("script return: must be object with decision")
 	}
 	obj := v.ToObject(rt)
 	if obj == nil {
-		return hooks.DecisionError, "", nil, errors.New("script return: must be object")
+		return hooks.DecisionError, "", "", nil, errors.New("script return: must be object")
 	}
 	decRaw := obj.Get("decision")
 	if decRaw == nil || goja.IsUndefined(decRaw) {
-		return hooks.DecisionError, "", nil, errors.New("script return: missing decision field")
+		return hooks.DecisionError, "", "", nil, errors.New("script return: missing decision field")
 	}
 	decStr, ok := decRaw.Export().(string)
 	if !ok {
-		return hooks.DecisionError, "", nil, errors.New("script return: decision must be string")
+		return hooks.DecisionError, "", "", nil, errors.New("script return: decision must be string")
 	}
 	dec := hooks.Decision(decStr)
 	switch dec {
 	case hooks.DecisionAllow, hooks.DecisionBlock, hooks.DecisionAsk, hooks.DecisionDefer:
 		// ok
 	default:
-		return hooks.DecisionError, "", nil, fmt.Errorf("script return: invalid decision %q", decStr)
+		return hooks.DecisionError, "", "", nil, fmt.Errorf("script return: invalid decision %q", decStr)
 	}
 	var reason string
 	if r := obj.Get("reason"); r != nil && !goja.IsUndefined(r) {
 		if s, ok := r.Export().(string); ok {
 			reason = s
+		}
+	}
+	var additionalContext string
+	if a := obj.Get("additionalContext"); a != nil && !goja.IsUndefined(a) {
+		if s, ok := a.Export().(string); ok {
+			additionalContext = s
 		}
 	}
 	var updated map[string]any
@@ -172,5 +189,5 @@ func parseReturn(rt *goja.Runtime, v goja.Value) (hooks.Decision, string, map[st
 			updated = m
 		}
 	}
-	return dec, reason, updated, nil
+	return dec, reason, additionalContext, updated, nil
 }

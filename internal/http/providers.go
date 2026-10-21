@@ -298,6 +298,11 @@ func (h *ProvidersHandler) registerInMemory(p *store.LLMProviderData) providerRu
 	}
 	apiBase := h.resolveAPIBase(p)
 	switch p.ProviderType {
+	case store.ProviderAPIRoute:
+		if apiBase == "" {
+			apiBase = store.APIRouteDefaultAPIBase
+		}
+		h.providerReg.RegisterForTenant(p.TenantID, providers.NewOpenAIProvider(p.Name, p.APIKey, apiBase, store.APIRouteDefaultModel).WithProviderType(p.ProviderType))
 	case store.ProviderChatGPTOAuth:
 		ts := oauth.NewDBTokenSource(h.store, h.secretStore, p.Name).WithTenantID(p.TenantID)
 		codex := providers.NewCodexProvider(p.Name, ts, apiBase, "")
@@ -400,6 +405,16 @@ func openAIProviderDefaults(providerType, apiBase string) (string, string) {
 			apiBase = store.MiniMaxDefaultAPIBase
 		}
 		return apiBase, store.MiniMaxDefaultModel
+	case store.ProviderAtlasCloud:
+		if apiBase == "" {
+			apiBase = store.AtlasCloudDefaultAPIBase
+		}
+		return apiBase, store.AtlasCloudDefaultModel
+	case store.ProviderRequesty:
+		if apiBase == "" {
+			apiBase = store.RequestyDefaultAPIBase
+		}
+		return apiBase, store.RequestyDefaultModel
 	default:
 		return apiBase, ""
 	}
@@ -424,9 +439,10 @@ func normalizeOllamaAPIBase(p *store.LLMProviderData) {
 // localURLProviderTypes are provider types that legitimately run on localhost.
 // They are restricted to an explicit localhost allowlist
 // rather than skipping SSRF validation entirely.
+// ACP is intentionally excluded: its api_base carries an executable command/path,
+// not a URL (see issue #1481).
 var localURLProviderTypes = map[string]bool{
 	store.ProviderOllama: true,
-	store.ProviderACP:    true,
 }
 
 // allowedLocalHosts are the only hosts permitted for local provider types.
@@ -492,6 +508,9 @@ func validateProviderURL(rawURL string, providerType string) error {
 	}
 	if providerType == store.ProviderClaudeCLI {
 		return validateClaudeCLIExecutablePath(rawURL)
+	}
+	if providerType == store.ProviderACP {
+		return validateACPExecutablePath(rawURL)
 	}
 	u, err := url.Parse(rawURL)
 	if err != nil {
@@ -578,6 +597,23 @@ func validateClaudeCLIExecutablePath(path string) error {
 		return nil
 	}
 	return fmt.Errorf("Claude CLI api_base must be %q or an absolute executable path, got %q", "claude", path)
+}
+
+// validateACPExecutablePath validates that api_base for ACP providers carries a
+// command or absolute executable path, not a URL. This mirrors the runtime
+// registration logic in cmd/gateway_providers.go.
+func validateACPExecutablePath(path string) error {
+	if strings.Contains(path, "\x00") {
+		return fmt.Errorf("ACP binary path cannot contain NUL byte")
+	}
+	if _, err := url.ParseRequestURI(path); err == nil && strings.Contains(path, "://") {
+		return fmt.Errorf("ACP api_base must be an executable path or command, got URL %q", path)
+	}
+	// Keep parity with registerACPFromDB: built-in command names or absolute paths.
+	if path == "claude" || path == "codex" || path == "gemini" || filepath.IsAbs(path) {
+		return nil
+	}
+	return fmt.Errorf("ACP api_base must be %q, %q, %q, or an absolute executable path, got %q", "claude", "codex", "gemini", path)
 }
 
 // --- Provider CRUD ---
@@ -813,6 +849,7 @@ func (h *ProvidersHandler) handleUpdateProvider(w http.ResponseWriter, r *http.R
 			return
 		}
 		candidate.Settings = rawSettings
+		updates["settings"] = rawSettings
 	}
 
 	// Re-validate URLs against the (possibly new) provider type.

@@ -19,6 +19,8 @@ func init() {
 		MsgFailedToDelete:   "删除 %s 失败：%s",
 		MsgFailedToSave:     "保存 %s 失败：%s",
 		MsgInvalidUpdates:   "更新内容无效",
+		// TODO(i18n): translate to zh
+		MsgAgentDeleteVaultConflict: "failed to delete agent: a vault document of this agent is at a path another deleted owner already orphaned; delete or re-path this agent's vault documents first, or upgrade to schema version 99 or later",
 
 		// Agent
 		MsgAgentNotFound:                       "未找到Agent：%s",
@@ -230,9 +232,11 @@ func init() {
 		MsgToolAnnouncementSingle: "我将使用 %s 处理下一步。",
 		MsgToolAnnouncementMulti:  "我将使用 %s 处理下一步。",
 
-		MsgSkillNudgePostscript: "此任务涉及多个步骤。要我将此过程保存为可重用技能吗？回复 **\"保存技能\"** 或 **\"跳过\"**。",
-		MsgSkillNudge70Pct:      "[System] 您已使用 70% 的迭代预算。请考虑本次会话中的模式是否值得保存为技能。",
-		MsgSkillNudge90Pct:      "[System] 您已使用 90% 的迭代预算。如果本次会话涉及可重用的模式，请考虑在完成前将其保存为技能。",
+		MsgSkillNudgePostscript:  "此任务涉及多个步骤。要我将此过程保存为可重用技能吗？回复 **\"保存技能\"** 或 **\"跳过\"**。",
+		MsgSkillNudge70Pct:       "[System] 您已使用 70% 的迭代预算。请考虑本次会话中的模式是否值得保存为技能。",
+		MsgSkillNudge90Pct:       "[System] 您已使用 90% 的迭代预算。如果本次会话涉及可重用的模式，请考虑在完成前将其保存为技能。",
+		MsgEmptyReplyFallback:    "⚠️ 代理无法生成响应。注意：部分工具操作可能已经执行 — 请先确认后再重试",
+		MsgContextBudgetExceeded: "⚠️ 对话内容已超出模型的上下文窗口，因此我在回答前停止了。本轮的部分工具操作可能已经执行。请开启新会话后继续。",
 
 		MsgInvalidRole: "无效角色：允许的值为 owner、admin、operator、member、viewer",
 

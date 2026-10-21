@@ -73,6 +73,18 @@ func TestHappyPathAllow(t *testing.T) {
 	}
 }
 
+func TestAllowReturnsAdditionalContext(t *testing.T) {
+	src := `function handle(event) { return {decision: "allow", additionalContext: "Use the required workflow."}; }`
+	h := newTestHandler()
+	dec, err, res := runWithResult(t, h, mkCfg(src), mkEvent(), 500*time.Millisecond)
+	if err != nil || dec != hooks.DecisionAllow {
+		t.Fatalf("decision=%v err=%v", dec, err)
+	}
+	if res.AdditionalContext != "Use the required workflow." {
+		t.Fatalf("additional context=%q", res.AdditionalContext)
+	}
+}
+
 // TestHappyPathBlock verifies block + reason round-trips.
 func TestHappyPathBlock(t *testing.T) {
 	src := `function handle(event) { return {decision: "block", reason: "nope"}; }`
@@ -249,5 +261,65 @@ func TestInvalidateHookDoesNotPanic(t *testing.T) {
 	// Re-execute to ensure cache repopulates cleanly.
 	if _, err := h.Execute(context.Background(), cfg, mkEvent()); err != nil {
 		t.Fatalf("post-invalidate err: %v", err)
+	}
+}
+
+func TestEventSenderIDAndUserID(t *testing.T) {
+	src := `function handle(event) {
+	  if (event.senderId !== "sender-123" || event.sender_id !== "sender-123") {
+	    return {decision: "block", reason: "bad sender"};
+	  }
+	  if (event.userId !== "user-456" || event.user_id !== "user-456") {
+	    return {decision: "block", reason: "bad user"};
+	  }
+	  return {decision: "allow", reason: "ok: " + event.senderId + ":" + event.userId};
+	}`
+	h := newTestHandler()
+	ev := mkEvent()
+	ev.SenderID = "sender-123"
+	ev.UserID = "user-456"
+	dec, err, res := runWithResult(t, h, mkCfg(src), ev, 500*time.Millisecond)
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if dec != hooks.DecisionAllow {
+		t.Fatalf("decision: got %v, reason: %s", dec, res.Reason)
+	}
+	if res.Reason != "ok: sender-123:user-456" {
+		t.Fatalf("reason mismatch: got %q", res.Reason)
+	}
+}
+
+func TestCompileCacheSkipsNilUUID(t *testing.T) {
+	h := newTestHandler()
+	// Dry-run test sets ID to uuid.Nil and Version to 0
+	cfg1 := hooks.HookConfig{
+		ID:          uuid.Nil,
+		Version:     0,
+		HandlerType: hooks.HandlerScript,
+		Config: map[string]any{
+			"source": `function handle(event) { return {decision: "allow", reason: "run-1"}; }`,
+		},
+	}
+	dec1, err1, res1 := runWithResult(t, h, cfg1, mkEvent(), 500*time.Millisecond)
+	if err1 != nil || dec1 != hooks.DecisionAllow || res1.Reason != "run-1" {
+		t.Fatalf("run 1 failed: dec=%v err=%v res=%+v", dec1, err1, res1)
+	}
+
+	// Change script source under the same uuid.Nil and Version 0
+	cfg2 := hooks.HookConfig{
+		ID:          uuid.Nil,
+		Version:     0,
+		HandlerType: hooks.HandlerScript,
+		Config: map[string]any{
+			"source": `function handle(event) { return {decision: "allow", reason: "run-2"}; }`,
+		},
+	}
+	dec2, err2, res2 := runWithResult(t, h, cfg2, mkEvent(), 500*time.Millisecond)
+	if err2 != nil || dec2 != hooks.DecisionAllow {
+		t.Fatalf("run 2 failed: dec=%v err=%v", dec2, err2)
+	}
+	if res2.Reason != "run-2" {
+		t.Fatalf("expected fresh compile with reason 'run-2', but got stale cached %q", res2.Reason)
 	}
 }

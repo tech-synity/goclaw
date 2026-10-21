@@ -33,10 +33,14 @@ func ExtractWikilinks(content string) []WikilinkMatch {
 			continue
 		}
 
-		// Build context: ~25 chars before and after the link
+		// Build context: ~25 bytes before and after the link.
+		// Sanitize with ToValidUTF8 so the byte-offset window does not
+		// split a multi-byte rune (Vietnamese, CJK, emoji), which would
+		// produce invalid UTF-8 that PostgreSQL rejects with
+		// "invalid byte sequence for encoding UTF8" (SQLSTATE 22021).
 		start := max(m[0]-25, 0)
 		end := min(m[1]+25, len(content))
-		ctx := content[start:end]
+		ctx := strings.ToValidUTF8(content[start:end], "")
 
 		result = append(result, WikilinkMatch{
 			Target:  target,
@@ -97,6 +101,15 @@ func SyncDocLinks(ctx context.Context, vs store.VaultStore, doc *store.VaultDocu
 	}
 
 	// Resolve all wikilinks, then batch-create links in a single call.
+	// Deduplicate by (FromDocID, ToDocID, LinkType) to prevent PostgreSQL
+	// "ON CONFLICT DO UPDATE command cannot affect row a second time" (SQLSTATE 21000)
+	// when the same target appears multiple times in the document.
+	type linkKey struct {
+		fromDocID string
+		toDocID   string
+		linkType  string
+	}
+	seen := make(map[linkKey]int) // key → index in links slice
 	var links []store.VaultLink
 	for _, m := range matches {
 		target, err := ResolveWikilinkTarget(ctx, vs, m.Target, tenantID, agentID)
@@ -108,6 +121,12 @@ func SyncDocLinks(ctx context.Context, vs store.VaultStore, doc *store.VaultDocu
 			slog.Debug("vault.link_unresolved", "target", m.Target)
 			continue
 		}
+		k := linkKey{fromDocID: doc.ID, toDocID: target.ID, linkType: "wikilink"}
+		if idx, ok := seen[k]; ok {
+			links[idx].Context += " | " + m.Context
+			continue
+		}
+		seen[k] = len(links)
 		links = append(links, store.VaultLink{
 			FromDocID: doc.ID,
 			ToDocID:   target.ID,

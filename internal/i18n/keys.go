@@ -21,6 +21,10 @@ const (
 	MsgFailedToSave     = "error.failed_to_save"    // "failed to save %s: %s"
 	MsgInvalidUpdates   = "error.invalid_updates"   // "invalid updates"
 
+	// Agent deletion blocked by the vault orphan collision of #1550. Fixed by migration
+	// 000099; kept for installations still on an earlier schema version.
+	MsgAgentDeleteVaultConflict = "error.agent_delete_vault_conflict"
+
 	// --- Agent ---
 	MsgAgentNotFound                       = "error.agent_not_found"       // "agent not found: %s"
 	MsgCannotDeleteDefault                 = "error.cannot_delete_default" // "cannot delete the default agent"
@@ -209,10 +213,10 @@ const (
 	MsgFailedToDeleteFile    = "error.failed_to_delete_file"    // "failed to delete"
 
 	// --- OAuth ---
-	MsgNoPendingOAuth        = "error.no_pending_oauth"        // "no pending OAuth flow"
-	MsgFailedToSaveToken     = "error.failed_to_save_token"    // "failed to save token"
-	MsgOAuthCallbackSuccess  = "oauth.callback_success"        // "Authorization successful. You may close this window."
-	MsgOAuthCallbackFailed   = "oauth.callback_failed"         // "Authorization failed. You may close this window."
+	MsgNoPendingOAuth       = "error.no_pending_oauth"     // "no pending OAuth flow"
+	MsgFailedToSaveToken    = "error.failed_to_save_token" // "failed to save token"
+	MsgOAuthCallbackSuccess = "oauth.callback_success"     // "Authorization successful. You may close this window."
+	MsgOAuthCallbackFailed  = "oauth.callback_failed"      // "Authorization failed. You may close this window."
 
 	// --- Intent Classify (channel-facing status replies) ---
 	MsgStatusWorking       = "status.working"         // "🔄 I'm working on your request... Please wait."
@@ -270,6 +274,13 @@ const (
 	MsgSkillNudgePostscript = "skill.nudge_postscript"
 	MsgSkillNudge70Pct      = "skill.nudge_70_pct"
 	MsgSkillNudge90Pct      = "skill.nudge_90_pct"
+
+	// Empty reply fallback (user-facing) — shown when a run finishes with no text
+	// output and no deliverable media, replacing the old meaningless "...".
+	MsgEmptyReplyFallback = "chat.empty_reply_fallback"
+
+	// Shown when the request guard stops a run because the context budget is exhausted.
+	MsgContextBudgetExceeded = "chat.context_budget_exceeded"
 
 	// Tool progress announcements (user-facing)
 	MsgToolAnnouncementSingle = "progress.tool_announcement.single" // "I'll use %s to handle the next step."

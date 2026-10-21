@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -80,6 +81,140 @@ func TestCheckGroupPolicy_Pairing_GroupAllowListBypasses(t *testing.T) {
 	}
 }
 
+func TestHandleMessageEvent_GroupContextFallsBackToSenderIDWhenNameLookupFails(t *testing.T) {
+	requireMention := true
+	msgBus := bus.New()
+	defer msgBus.Close()
+
+	ch, err := New(config.FeishuConfig{
+		AppID:          "app",
+		AppSecret:      "secret",
+		GroupPolicy:    "open",
+		RequireMention: &requireMention,
+	}, msgBus, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	ch.SetName("feishu-test")
+	ch.botOpenID = "ou_target_bot"
+	srv := newSimpleMockServer(t, `{"code":50000,"msg":"name lookup failed"}`)
+	ch.client = NewLarkClient("app", "secret", srv.URL)
+
+	first := feishuGroupTextEvent(t, "om_context", "ou_duc", "oc_group", "Send AGENTS.md again", nil)
+	ch.handleMessageEvent(context.Background(), first)
+	assertNoFeishuInbound(t, msgBus)
+
+	entries := ch.GroupHistory().GetEntries("oc_group")
+	if len(entries) != 1 {
+		t.Fatalf("history entries = %d, want 1", len(entries))
+	}
+	if entries[0].Sender != "ou_duc" {
+		t.Fatalf("history sender = %q, want sender ID fallback", entries[0].Sender)
+	}
+
+	second := feishuGroupTextEvent(t, "om_mention", "ou_duc", "oc_group", "@_user_1", []EventMention{
+		feishuMention("@_user_1", "ou_target_bot", "Techlead"),
+	})
+	ch.handleMessageEvent(context.Background(), second)
+
+	msg := assertFeishuInbound(t, msgBus)
+	for _, want := range []string{
+		"[From: ou_duc]",
+		"[empty message]",
+		"Send AGENTS.md again",
+	} {
+		if !strings.Contains(msg.Content, want) {
+			t.Errorf("content missing %q:\n%s", want, msg.Content)
+		}
+	}
+	if got := ch.GroupHistory().GetEntries("oc_group"); len(got) != 0 {
+		t.Fatalf("history entries after publish = %d, want 0", len(got))
+	}
+}
+
+func TestHandleMessageEvent_GroupContextPreservesResolvedSenderName(t *testing.T) {
+	requireMention := true
+	msgBus := bus.New()
+	defer msgBus.Close()
+
+	ch, err := New(config.FeishuConfig{
+		AppID:          "app",
+		AppSecret:      "secret",
+		GroupPolicy:    "open",
+		RequireMention: &requireMention,
+	}, msgBus, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	ch.SetName("feishu-test")
+	ch.botOpenID = "ou_target_bot"
+	srv := newSimpleMockServer(t, `{"code":0,"msg":"ok","data":{"user":{"name":"Duc Nguyen"}}}`)
+	ch.client = NewLarkClient("app", "secret", srv.URL)
+
+	event := feishuGroupTextEvent(t, "om_named", "ou_duc", "oc_group", "@_user_1 hello", []EventMention{
+		feishuMention("@_user_1", "ou_target_bot", "Techlead"),
+	})
+	ch.handleMessageEvent(context.Background(), event)
+
+	msg := assertFeishuInbound(t, msgBus)
+	if msg.Content != "[From: Duc Nguyen]\nhello" {
+		t.Fatalf("content = %q, want resolved sender name", msg.Content)
+	}
+	if msg.Metadata["sender_name"] != "Duc Nguyen" {
+		t.Fatalf("sender_name metadata = %q", msg.Metadata["sender_name"])
+	}
+}
+
+func TestHandleMessageEvent_P2PContextRemainsNameBased(t *testing.T) {
+	msgBus := bus.New()
+	defer msgBus.Close()
+
+	ch, err := New(config.FeishuConfig{AppID: "app", AppSecret: "secret", DMPolicy: "open"}, msgBus, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	ch.SetName("feishu-test")
+	srv := newSimpleMockServer(t, `{"code":0,"msg":"ok","data":{"user":{"name":"Duc Nguyen"}}}`)
+	ch.client = NewLarkClient("app", "secret", srv.URL)
+
+	event := feishuGroupTextEvent(t, "om_p2p", "ou_duc", "oc_p2p", "hello", nil)
+	event.Event.Message.ChatType = "p2p"
+	ch.handleMessageEvent(context.Background(), event)
+
+	msg := assertFeishuInbound(t, msgBus)
+	if msg.Content != "[From: Duc Nguyen]\nhello" {
+		t.Fatalf("content = %q, want unchanged p2p name context", msg.Content)
+	}
+}
+
+func TestHandleMessageEvent_GroupContextDoesNotEmitEmptySenderLabel(t *testing.T) {
+	requireMention := true
+	msgBus := bus.New()
+	defer msgBus.Close()
+
+	ch, err := New(config.FeishuConfig{
+		AppID:          "app",
+		AppSecret:      "secret",
+		GroupPolicy:    "open",
+		RequireMention: &requireMention,
+	}, msgBus, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	ch.SetName("feishu-test")
+	ch.botOpenID = "ou_target_bot"
+
+	event := feishuGroupTextEvent(t, "om_no_sender", "", "oc_group", "@_user_1", []EventMention{
+		feishuMention("@_user_1", "ou_target_bot", "Techlead"),
+	})
+	ch.handleMessageEvent(context.Background(), event)
+
+	msg := assertFeishuInbound(t, msgBus)
+	if msg.Content != "[empty message]" {
+		t.Fatalf("content = %q, want no empty sender annotation", msg.Content)
+	}
+}
+
 type feishuPolicyPairingStore struct {
 	requests     int
 	lastSenderID string
@@ -94,6 +229,10 @@ func (s *feishuPolicyPairingStore) RequestPairing(_ context.Context, senderID, c
 	s.lastChannel = channel
 	s.lastChatID = chatID
 	return "PAIR1234", nil
+}
+
+func (s *feishuPolicyPairingStore) SetPairingPermanent(context.Context, string, string, bool) error {
+	return nil
 }
 
 func (s *feishuPolicyPairingStore) IsPaired(_ context.Context, senderID, channel string) (bool, error) {

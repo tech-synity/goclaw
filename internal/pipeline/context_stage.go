@@ -43,6 +43,8 @@ func (s *ContextStage) Execute(ctx context.Context, state *RunState) error {
 			SessionID: state.Input.SessionKey,
 			TenantID:  store.TenantIDFromContext(ctx),
 			AgentID:   store.AgentIDFromContext(ctx),
+			SenderID:  state.Input.SenderID,
+			UserID:    state.Input.UserID,
 			RawInput:  state.Input.Message,
 			HookEvent: hooks.EventSessionStart,
 		})
@@ -56,12 +58,22 @@ func (s *ContextStage) Execute(ctx context.Context, state *RunState) error {
 		SessionID: state.Input.SessionKey,
 		TenantID:  store.TenantIDFromContext(ctx),
 		AgentID:   store.AgentIDFromContext(ctx),
+		SenderID:  state.Input.SenderID,
+		UserID:    state.Input.UserID,
 		RawInput:  state.Input.Message,
 		HookEvent: hooks.EventUserPromptSubmit,
 	}); r.Decision == hooks.DecisionBlock {
 		return fmt.Errorf("hook blocked user_prompt_submit")
-	} else if r.UpdatedRawInput != nil {
-		state.Input.Message = *r.UpdatedRawInput
+	} else {
+		if r.UpdatedRawInput != nil {
+			state.Input.Message = *r.UpdatedRawInput
+		}
+		if r.AdditionalContext != "" {
+			if state.Input.ExtraSystemPrompt != "" {
+				state.Input.ExtraSystemPrompt += "\n\n"
+			}
+			state.Input.ExtraSystemPrompt += r.AdditionalContext
+		}
 	}
 
 	// 0. Inject context values (agent/tenant/user/workspace scoping, input guard, truncation).
@@ -75,17 +87,10 @@ func (s *ContextStage) Execute(ctx context.Context, state *RunState) error {
 		state.Ctx = ctx
 	}
 
-	// 0.5. Resolve the effective context window for this run's provider/model.
-	// Done once here so PruneStage reads a stable value on every iteration and
-	// the budget can't drift if the model somehow changes mid-run. A zero
-	// result from the resolver (unknown model, no registry) leaves the field
-	// zero — PruneStage then falls back to Config.ContextWindow.
-	if s.deps.ResolveContextWindow != nil && state.Model != "" {
-		providerID := ""
-		if state.Provider != nil {
-			providerID = state.Provider.Name()
-		}
-		if cw := s.deps.ResolveContextWindow(providerID, state.Model); cw > 0 {
+	// 0.5. Snapshot the configured agent window once for this run. Model and
+	// provider do not participate in request-budget authority.
+	if s.deps.ResolveContextWindow != nil {
+		if cw := s.deps.ResolveContextWindow(); cw > 0 {
 			state.Context.EffectiveContextWindow = cw
 		}
 	}
@@ -140,13 +145,9 @@ func (s *ContextStage) Execute(ctx context.Context, state *RunState) error {
 		}
 	}
 
-	// 5. Compute overhead tokens via TokenCounter (replaces heuristic estimateOverhead).
-	// Includes both system-prompt tokens and tool-schema tokens so PruneStage
+	// 5. Compute overhead tokens (system prompt + tool schemas) so PruneStage
 	// budget shrinks correctly when tools are large.
-	if s.deps.TokenCounter != nil {
-		system := state.Messages.System()
-		overhead := s.deps.TokenCounter.CountMessages(state.Model, []providers.Message{system})
-		overhead += s.deps.TokenCounter.CountToolSchemas(state.Model, state.Think.Tools)
+	if overhead, ok := budgetOverheadTokens(s.deps, state.Model, state.Messages.System(), state.Think.Tools); ok {
 		state.Context.OverheadTokens = overhead
 	}
 
